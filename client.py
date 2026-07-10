@@ -1,16 +1,18 @@
 import socket
 import threading
 
-DEFAULT_HOST = 'localhost'
-DEFAULT_PORT = 6000
-BUFFER_SIZE = 4096
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 
-
+from crypto.rsa_keys import RSA
+from crypto.signature import sign_message
+from protocol.decoder import decode_response
+from protocol.encoder import (encode_list_objects, to_b64, encode_send_signed_text)
+from protocol.frame import (ConnectionClosedError, FrameException, read_frame, send_frame)
+from constant import (DEFAULT_HOST, DEFAULT_PORT)
 class Client:
     def __init__(self):
         self.prompt = '> '
         self.socket: socket.socket = None
-        self._listener: threading.Thread = None
         self.connected: bool = False
 
     def welcome(self) -> None:
@@ -48,31 +50,12 @@ class Client:
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((DEFAULT_HOST, DEFAULT_PORT))
-            self._listener = threading.Thread(target=self.receiver, daemon=True)
-            self._listener.start()
             self.connected = True
             print(f"[+] Connected to server {DEFAULT_HOST}:{DEFAULT_PORT}")
             return True
         except (socket.error, OSError) as e:
             self.connected = False
             return False
-
-
-    def receiver(self):
-        while self.connected:
-            self.socket.settimeout(0.5)
-            try:
-                data = self.socket.recv(BUFFER_SIZE)
-                if not data:
-                    self.connected = False
-                    self.close()
-                    break
-            except socket.timeout:
-                continue
-            except (socket.error, OSError) as e:
-                self.connected = False
-                self.close()
-                break
 
 
     def close(self) -> None:                        
@@ -96,10 +79,14 @@ class Client:
             return
         else:
             cmd, _, opt = line[1:].partition(' ')
+            """print(f"cmd = {cmd}")
+            print(f"sep = '{_}'")
+            print(f"opt = {opt}")
+            print(len(line[1:].partition(' ')))"""
             cmd = cmd.lower()
-            if cmd in ('quit', 'exit') and not opt:
+            if cmd == 'exit' and not opt:
                 self.quit()
-            elif cmd == 'help'  and not opt:
+            elif cmd == 'help' and not opt:
                 self.print_help()
                 return
             elif cmd == 'connect':
@@ -111,11 +98,43 @@ class Client:
             elif cmd == 'clear':
                 self.clear_screen()
                 return
-            elif cmd == 'send_text':
-                print('[TODO] -> send signed object')
+            elif cmd == 'generate_keys' and len(opt.split(' ')) == 1:
+                print("------------------------------")
+                if self.generate_keys_for_user(opt.split(' ')[0]):
+                    print(f"The key pair for {opt.split(' ')[0]} is generated")
+                else:
+                    print(f"Error generating a key pair for {opt.split(' ')[0]}")
+                print("------------------------------")
+                return
+            elif cmd == 'send_text'  and len(opt.split(' ')) >= 3:
+                param = opt.split(' ', 2)
+                username = param[0]
+                object_name = param[1]
+                message_body = param[2]
+                print("------------------------------")
+                try:
+                    res = self.send_text(username, object_name, message_body)
+                    print(res)
+                except Exception as e:
+                    print(e)
+                finally:
+                    print("------------------------------")
                 return
             elif cmd == 'list':
-                print('[TODO] -> /get <object_id>')
+                print("------------------------------")
+                try:
+                    res = self.list()
+                    id = 1
+                    for obj in res["objects"]:
+                        print(f" - OBJECT {id}:")
+                        print(obj)
+                        id +=1
+                        print("---------")
+                        print()
+                except Exception as e:
+                    print(e)
+                finally:
+                    print("------------------------------")
                 return
             elif cmd == 'get':
                 print('[TODO] -> get one object (request/response)"')
@@ -127,8 +146,10 @@ class Client:
                 print('[TODO] -> fetch list, fetch each object, then verify locally')
                 return
             else:
-                print(f"[!] - Command not recognized: /{cmd} {opt}")
-                print("[+] - /help, Showhelp")
+                print("------------------------------")
+                print(f"[*] - Command not recognized: /{cmd} {opt}")
+                print("[*] - /help, showhelp")
+                print("------------------------------")
                 return
         
     def clear_screen(self) -> None:
@@ -138,6 +159,12 @@ class Client:
             os.system("cls")
         else:
             os.system("clear")
+    
+    def quit(self) -> None:
+        import sys
+        self.connected = False
+        self.close()
+        sys.exit(0)
         
 
     def run(self) -> None:
@@ -149,6 +176,45 @@ class Client:
             except EOFError:
                 break
             self.handle_line(line)
+
+    def generate_keys_for_user(self, username: str) -> bool:
+        rsa = RSA()
+        return rsa.generate_key_pair_for_username(username)
+
+    # COMMAND: SEND_TEXT <username> <object_name> <message>
+    def send_text(self, username: str, object_name: str, message_body: str):
+        private_key: RSAPrivateKey = RSA.load_private_key_from_file_by_username(username) # load private key by username
+        message_bytes = message_body.encode("utf-8") # encode message body as bytes UTF-8
+        message_signed = sign_message(private_key, message_bytes) # sign the message bytes with the private key
+
+        message_b64 = to_b64(message_bytes) # Base64-encode the message body
+        signature_b64 = to_b64(message_signed) # Base64-encode the signature
+        public_key_b64 = to_b64(RSA.public_key_to_pem(private_key.public_key()))# Base64-encode the public key
+
+        data_to_send: tuple[bytes, dict[str, str]] = encode_send_signed_text(object_name, username, message_b64, signature_b64, public_key_b64)
+        return self.send_request(data_to_send[0], data_to_send[1])
+    
+    # COMMAND: GET <object_id>
+    def get(self, object_id: int):
+       pass
+    
+    # COMMAND: LIST
+    def list(self):
+        data_to_send: tuple[bytes, dict[str, str]] = encode_list_objects()
+        return self.send_request(data_to_send[0], data_to_send[1])
+    
+    # Centralize all requests in one function
+    def send_request(self, msg_type: bytes, payload: dict) -> dict:
+        if not self.connected:
+            raise ConnectionClosedError("Not connected. Use /connect.")
+
+        try:
+            send_frame(self.socket, msg_type, payload)
+            resp_type, resp_payload = read_frame(self.socket)
+            return decode_response(resp_type, resp_payload)
+
+        except (FrameException, ConnectionClosedError) as e:
+            raise Exception(f"Error : {e}") from e
 
 client = Client()
 client.run()

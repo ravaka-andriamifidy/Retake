@@ -1,4 +1,12 @@
 import socket
+import json
+from pathlib import Path
+
+from protocol.frame import (ConnectionClosedError, FrameException, build_frame, read_frame)
+from protocol.encoder import (encode_error, encode_ok, MessageType)
+from protocol.decoder import (decode_request)
+from storage.object_store import (store_signed_object, get_list_object)
+from constant import STORAGE_DIR
 
 DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 6000
@@ -10,15 +18,65 @@ s.bind((DEFAULT_HOST, DEFAULT_PORT))
 # Listen for incoming connections
 s.listen(5)
 
+print(f"Server started on {DEFAULT_HOST}:{DEFAULT_PORT}")
+print("Waiting for clients...")
+print()
+
 while True:
-    print(f"Server started on {DEFAULT_HOST}:{DEFAULT_PORT}")
-    print("Waiting for clients...")
-    print()
     # Accept a connection
     conn, addr = s.accept()
     print(f"> Connected by {addr}")
+    print()
     while True:
-        data = conn.recv(1024)
-        if not data:
+        try:
+            msg_type, payload = read_frame(conn)
+            
+            if msg_type == MessageType.SUBMIT:
+                signed_object: dict = decode_request(msg_type, payload)
+                # store the signed_object in the "server_storage" folder
+                store_signed_object(signed_object)
+                resp_bytes= build_frame(MessageType.OK, encode_ok(f"Signed object added for {signed_object["sender"]} and store in  /server_storage folder")[1]) 
+                conn.sendall(resp_bytes) # send the response to the client
+                
+            if msg_type == MessageType.GET:
+                pass
+
+            if msg_type == MessageType.LIST:
+                objects = get_list_object()
+                print("get object DONEEEEEEEEEE ")
+                resp_bytes= build_frame(MessageType.LIST, objects) 
+                print("resp_bytes ", resp_bytes)
+                conn.sendall(resp_bytes) # send the response to the client
+
+            if msg_type == MessageType.TAMPER:
+                pass
+
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error(f"UnicodeDecodeError-JSONDecodeError: {e}")[1])
+            conn.sendall(resp_bytes)
+        except  ConnectionClosedError as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Connection error: {e}")[1])
+            conn.sendall(resp_bytes)
             break
-        conn.sendall(data)
+        except (FrameException) as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error(str(e))[1])
+            conn.sendall(resp_bytes)
+            break
+        except FileExistsError as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Folder already exists: {e}")[1])
+            conn.sendall(resp_bytes)
+            break
+        except PermissionError as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Permission denied: {e}")[1])
+            conn.sendall(resp_bytes)
+        except KeyError as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Missing field: {e}")[1])
+            conn.sendall(resp_bytes)
+        except OSError as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error("System error: {e}")[1])
+            conn.sendall(resp_bytes)
+            break
+        except Exception as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Unexpected error: {e}")[1])
+            conn.sendall(resp_bytes)
+            break
