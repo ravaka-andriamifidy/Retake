@@ -40,11 +40,12 @@ def encode_tamper_object(object_id: str):
     }
     return MessageType.TAMPER, payload  
 
-def encode_ok(message: str) -> tuple[bytes, dict]:
+def encode_ok(data: dict) -> tuple[bytes, dict]:
     payload = {
         "status": "OK",
-        "message": message,
     }
+    if data:
+        payload.update(data)
     return MessageType.OK, payload
  
 

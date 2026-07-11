@@ -1,14 +1,15 @@
+from pathlib import Path
 import socket
-import threading
 
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
 
 from crypto.rsa_keys import RSA
-from crypto.signature import sign_message
+from crypto.signature import sign_message, verify_signature
 from protocol.decoder import decode_response
-from protocol.encoder import (encode_get_object, encode_list_objects, encode_tamper_object, to_b64, encode_send_signed_text)
+from protocol.encoder import (encode_get_object, encode_list_objects, encode_tamper_object, from_b64, to_b64, encode_send_signed_text)
 from protocol.frame import (ConnectionClosedError, FrameException, read_frame, send_frame)
-from constant import (DEFAULT_HOST, DEFAULT_PORT)
+from constant import (DEFAULT_HOST, DEFAULT_PORT, STORAGE_DIR)
+from storage.object_store import MetadataException, StorageError
 class Client:
     def __init__(self):
         self.prompt = '> '
@@ -112,6 +113,8 @@ class Client:
                 try:
                     res = self.send_text(username, object_name, message_body)
                     print(res)
+                    print("---------")
+                    print(f"Signed object created for {username}")
                 except Exception as e:
                     print(e)
                 finally:
@@ -121,16 +124,19 @@ class Client:
                 print("------------------------------")
                 try:
                     res = self.list()
-                    if not res["objects"]:
-                        print("No signed items")
+                    if res.get("status") == "OK":
+                        if not res["objects"]:
+                            print("No signed items")
+                        else:
+                            id = 1
+                            for obj in res["objects"]:
+                                print(f" - SIGNED OBJECT {id}:")
+                                print(obj)
+                                id +=1
+                                print("---------")
+                                print()
                     else:
-                        id = 1
-                        for obj in res["objects"]:
-                            print(f" - SIGNED OBJECT {id}:")
-                            print(obj)
-                            id +=1
-                            print("---------")
-                            print()
+                        print(f"{res.get('message')}")
                 except Exception as e:
                     print(e)
                 finally:
@@ -140,12 +146,15 @@ class Client:
                 print("------------------------------")
                 try:
                     res = self.get(opt)
-                    if not res["objects"]:
-                        print("Signed object not found")
+                    if res.get("status") == "OK":
+                        if not res["object"]:
+                            print(f"Signed object with ID {opt} not found")
+                        else:
+                            print(f" - SIGNED OBJECT {opt}:")
+                            print(res["object"])
+                            print()
                     else:
-                        print(f" - SIGNED OBJECT {opt}:")
-                        print(res["objects"][0])
-                        print()
+                        print(f"{res.get('message')}")
                 except Exception as e:
                     print(e)
                 finally:
@@ -155,24 +164,37 @@ class Client:
                 print("------------------------------")
                 try:
                     res = self.tamper(opt)
-                    if not res:
-                        print(f"Signed object with ID {opt} not found")
+                    if res.get("status") == "OK":
+                        if not res["object"]:
+                            print(f"Signed object with ID {opt} not found")
+                        else:
+                            print(f" - TAMPER SIGNED OBJECT WITH ID {opt}:")
+                            print()
+                            print(res)
+                            print("---------")
+                            print(f"Signed object with ID {opt} is tampered successfully")
                     else:
-                        print(f" - TAMPER SIGNED OBJECT WITH ID {opt}:")
-                        print()
-                        print(res)
-                        print("---------")
-                        print(f"Signed object with ID {opt} is tampered successfully")
+                        print(f"{res.get('message')}")
                 except Exception as e:
                     print(e)
                 finally:
                     print("------------------------------")
                 return
-            elif cmd == 'verify'  and not opt:
-                print('[TODO] -> /verify <object_id>')
+            elif cmd == 'verify'  and len(opt.split(' ')) == 1 and opt.isdigit():
+                print("------------------------------")
+                try:
+                    res = self.verify(opt)
+                    print(f" - SIGNED OBJECT {opt}:  {res}")
+                except Exception as e:
+                    print(e)
+                print("------------------------------")
                 return
             elif cmd == 'verify_all'  and not opt:
-                print('[TODO] -> fetch list, fetch each object, then verify locally')
+                print("------------------------------")
+                res = self.verify_all()
+                for obj in res["objects"]:
+                    print(f" - {obj["signed_object"]}: {obj["signature"]}")
+                print("------------------------------")
                 return
             else:
                 print("------------------------------")
@@ -233,10 +255,68 @@ class Client:
         data_to_send: tuple[bytes, dict[str, str]] = encode_list_objects()
         return self.send_request(data_to_send[0], data_to_send[1])
     
-    # COMMAND: TAMPER
+    # COMMAND: TAMPER <object_id>
     def tamper(self, object_id: str):
         data_to_send: tuple[bytes, dict[str, str]] = encode_tamper_object(object_id)
         return self.send_request(data_to_send[0], data_to_send[1])
+    
+    # COMMAND: VERIFY <object_id>
+    def verify(self, object_id: str) -> str:
+        data_to_send: tuple[bytes, dict[str, str]] = encode_get_object(object_id)
+        try:
+            data_to_verify = self.send_request(data_to_send[0], data_to_send[1])
+            if data_to_verify["object"]:
+                # client-side signature verification 
+                message_bytes = from_b64(data_to_verify["object"]["message_b64"]) 
+                signature_bytes = from_b64(data_to_verify["object"]["signature_b64"])
+                public_key =  RSA.load_public_key_from_pem(from_b64(data_to_verify["object"]["public_key_b64"]))
+                if verify_signature(public_key, message_bytes, signature_bytes) and verify_signature(public_key, self.load_content_bin(data_to_verify["object"]["object_id"]), signature_bytes):
+                    return "VALID"
+                else:
+                    return "INVALID"
+            else:
+                return "No such file to validate"
+        except Exception as e:
+            return e
+        
+    # COMMAND: VERIFY <object_id>
+    def verify_all(self):
+        data_to_send: tuple[bytes, dict[str, str]] = encode_list_objects()
+        result = {
+            "objects": []
+        }
+        try:
+            all_data_to_verify = self.send_request(data_to_send[0], data_to_send[1])
+            for obj in all_data_to_verify["objects"]:
+                object = {
+                    "signed_object": f"object {obj["object_id"]}",
+                    "signature": ""
+                }
+                if obj:
+                    # client-side signature verification 
+                    message_bytes = from_b64(obj["message_b64"]) 
+                    signature_bytes = from_b64(obj["signature_b64"])
+                    public_key =  RSA.load_public_key_from_pem(from_b64(obj["public_key_b64"]))
+                    if verify_signature(public_key, message_bytes, signature_bytes)  and verify_signature(public_key, self.load_content_bin(obj["object_id"]), signature_bytes):
+                        object["signature"] = "VALID"
+                    else:
+                        object["signature"] = "INVALID"
+                result["objects"].append(object)
+            return result
+        except Exception as e:
+            raise
+
+    # TO VERIFY if THE CONTENT OF CONTENT.BIN matches
+    def load_content_bin(self, object_id: str) -> dict:
+        object_path = Path(STORAGE_DIR) / f"object_{object_id}"
+    
+        if not object_path.exists():
+            return b''
+        
+        if object_path.exists():
+            with open(object_path / "content.bin", "rb") as f:
+                original_bytes = f.read() # read the content
+        return original_bytes
     
     # Centralize all request/reponse in one function and DIRECTLY get the response after
     def send_request(self, msg_type: bytes, payload: dict) -> dict:
@@ -248,7 +328,7 @@ class Client:
             resp_type, resp_payload = read_frame(self.socket)
             return decode_response(resp_type, resp_payload)
 
-        except (FrameException, ConnectionClosedError) as e:
+        except (FrameException, ConnectionClosedError, MetadataException) as e:
             raise Exception(f"Error on receiving response: {e}") from e
 
 client = Client()
