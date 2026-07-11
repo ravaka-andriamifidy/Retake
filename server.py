@@ -5,7 +5,7 @@ from pathlib import Path
 from protocol.frame import (ConnectionClosedError, FrameException, build_frame, read_frame)
 from protocol.encoder import (encode_error, encode_ok, MessageType)
 from protocol.decoder import (decode_request)
-from storage.object_store import (store_signed_object, get_list_object)
+from storage.object_store import (MetadataError, StorageError, get_object_by_id, store_signed_object, get_list_object, tamper)
 from constant import STORAGE_DIR
 
 DEFAULT_HOST = 'localhost'
@@ -39,27 +39,34 @@ while True:
                 conn.sendall(resp_bytes) # send the response to the client
                 
             if msg_type == MessageType.GET:
-                pass
+                object_id_request : dict = decode_request(msg_type, payload)
+                object = get_object_by_id(object_id_request["object_id"])
+                resp_bytes= build_frame(MessageType.GET, object) 
+                conn.sendall(resp_bytes) # send the response to the client
 
             if msg_type == MessageType.LIST:
                 objects = get_list_object()
-                print("get object DONEEEEEEEEEE ")
                 resp_bytes= build_frame(MessageType.LIST, objects) 
-                print("resp_bytes ", resp_bytes)
                 conn.sendall(resp_bytes) # send the response to the client
 
             if msg_type == MessageType.TAMPER:
-                pass
+                object_id_request : dict = decode_request(msg_type, payload)
+                object: dict = tamper(object_id_request["object_id"])
+                resp_bytes= build_frame(MessageType.TAMPER, object)
+                conn.sendall(resp_bytes) # send the response to the client
 
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             resp_bytes= build_frame(MessageType.ERROR, encode_error(f"UnicodeDecodeError-JSONDecodeError: {e}")[1])
+            conn.sendall(resp_bytes)
+        except StorageError as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error("Storage error: {e}")[1])
             conn.sendall(resp_bytes)
         except  ConnectionClosedError as e:
             resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Connection error: {e}")[1])
             conn.sendall(resp_bytes)
             break
         except (FrameException) as e:
-            resp_bytes= build_frame(MessageType.ERROR, encode_error(str(e))[1])
+            resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Frame exception: {e}")[1])
             conn.sendall(resp_bytes)
             break
         except FileExistsError as e:
@@ -69,8 +76,8 @@ while True:
         except PermissionError as e:
             resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Permission denied: {e}")[1])
             conn.sendall(resp_bytes)
-        except KeyError as e:
-            resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Missing field: {e}")[1])
+        except MetadataError as e:
+            resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Metadata error: {e}")[1])
             conn.sendall(resp_bytes)
         except OSError as e:
             resp_bytes= build_frame(MessageType.ERROR, encode_error("System error: {e}")[1])
