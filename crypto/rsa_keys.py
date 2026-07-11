@@ -64,4 +64,7 @@ class RSA:
             raise FileNotFoundError(f"No private key found for ‘{username}’ in {KEY_DIR}/ folder.")
         with open(private_path, "rb") as f:
             return serialization.load_pem_private_key(f.read(), password=None)
-    
+        
+    @staticmethod
+    def load_public_key_from_pem(pem_bytes: bytes) -> RSAPublicKey:
+        return serialization.load_pem_public_key(pem_bytes)

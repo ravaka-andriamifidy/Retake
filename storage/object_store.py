@@ -3,13 +3,13 @@ from datetime import datetime, timezone
 import json
 import shutil
 
-from protocol.encoder import from_b64
+from protocol.encoder import from_b64, to_b64
 from constant import REQUIRED_METADATA_FIELDS, STORAGE_DIR
 
 class StorageError(Exception):
     pass
 
-class MetadataError(Exception):
+class MetadataException(Exception):
     pass
 
 def store_signed_object(signed_object: dict):
@@ -83,7 +83,7 @@ def get_list_object():
 def get_object_by_id(object_id: str):
     storage = Path(STORAGE_DIR)
     data = {
-        "objects": []
+        "object": {}
     }
 
     for object_path in storage.iterdir():
@@ -92,29 +92,33 @@ def get_object_by_id(object_id: str):
             if metadata_path.exists():
                 # Read from metadata file and parse JSON
                 with open(metadata_path, "r") as f:
-                    data["objects"].append(json.load(f))
+                    data["object"] = json.load(f)
     return data
 
 def tamper(object_id: str) -> dict:
     object_path = Path(STORAGE_DIR) / f"object_{object_id}"
-    metadata = {}
+    metadata = {
+        "object": {}
+    }
  
     if not object_path.exists():
         raise StorageError(f"Folder 'object_{object_id}' not found")
     
     if object_path.exists():
-        metadata = load_metadata(object_path)
+        metadata["object"] = load_metadata(object_path)
     
         with open(object_path / "content.bin", "rb") as f:
             original_bytes = f.read() # read the content
         with open(object_path / "content.bin", "wb") as f:
-            f.write(original_bytes + b" [TAMPERED]") # modify the content
+            tampered_bytes = original_bytes + b" [TAMPERED]"
+            f.write(tampered_bytes) # modify the content
     
-        metadata["tampered"] = True
+        metadata["object"]["tampered"] = True
+        metadata["object"]["message_b64"] = to_b64(tampered_bytes)
         with open(object_path / "metadata.json", "w") as f:
-            json.dump(metadata, f, indent=2)
+            json.dump(metadata["object"], f, indent=2)
  
-    return metadata
+    return metadata["object"]
 
 # LOAD METADATA
 def load_metadata(object_path: Path) -> dict:
@@ -127,7 +131,7 @@ def load_metadata(object_path: Path) -> dict:
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
     except json.JSONDecodeError as e:
-        raise MetadataError(f" JSONDecodeError: {e}")
+        raise MetadataException(f" JSONDecodeError: {e}")
  
     validate_metadata(metadata)
     return metadata
@@ -135,15 +139,15 @@ def load_metadata(object_path: Path) -> dict:
 # VALIDATE METADATA FIELD
 def validate_metadata(metadata: dict) -> None:
     if not isinstance(metadata, dict):
-        raise MetadataError(f"Invalid JSON object in metadata")
+        raise MetadataException(f"Invalid JSON object in metadata")
  
     missing = [f for f in REQUIRED_METADATA_FIELDS if f not in metadata]
     if missing:
-        raise MetadataError( f"Missing mandatory fields -> {missing}")
+        raise MetadataException( f"Missing mandatory fields -> {missing}")
  
     for field, expected_type in REQUIRED_METADATA_FIELDS.items():
         value = metadata[field]
         if not isinstance(value, expected_type):
-            raise MetadataError(f" Field '{field}' must be " f"'{expected_type.__name__}' type (current type: {type(value).__name__})")
+            raise MetadataException(f" Field '{field}' must be " f"'{expected_type.__name__}' type (current type: {type(value).__name__})")
  
     
