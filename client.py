@@ -6,7 +6,7 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPubl
 from crypto.rsa_keys import RSA
 from crypto.signature import sign_message
 from protocol.decoder import decode_response
-from protocol.encoder import (encode_list_objects, to_b64, encode_send_signed_text)
+from protocol.encoder import (encode_get_object, encode_list_objects, encode_tamper_object, to_b64, encode_send_signed_text)
 from protocol.frame import (ConnectionClosedError, FrameException, read_frame, send_frame)
 from constant import (DEFAULT_HOST, DEFAULT_PORT)
 class Client:
@@ -71,6 +71,7 @@ class Client:
                 print(f"[+] Disconnected to {DEFAULT_HOST} : {DEFAULT_PORT}")
             except OSError:
                 pass
+        self.connected = False
         self.socket = None
 
 
@@ -79,10 +80,6 @@ class Client:
             return
         else:
             cmd, _, opt = line[1:].partition(' ')
-            """print(f"cmd = {cmd}")
-            print(f"sep = '{_}'")
-            print(f"opt = {opt}")
-            print(len(line[1:].partition(' ')))"""
             cmd = cmd.lower()
             if cmd == 'exit' and not opt:
                 self.quit()
@@ -124,20 +121,52 @@ class Client:
                 print("------------------------------")
                 try:
                     res = self.list()
-                    id = 1
-                    for obj in res["objects"]:
-                        print(f" - OBJECT {id}:")
-                        print(obj)
-                        id +=1
-                        print("---------")
+                    if not res["objects"]:
+                        print("No signed items")
+                    else:
+                        id = 1
+                        for obj in res["objects"]:
+                            print(f" - SIGNED OBJECT {id}:")
+                            print(obj)
+                            id +=1
+                            print("---------")
+                            print()
+                except Exception as e:
+                    print(e)
+                finally:
+                    print("------------------------------")
+                return
+            elif cmd == 'get' and len(opt.split(' ')) == 1 and opt.isdigit():
+                print("------------------------------")
+                try:
+                    res = self.get(opt)
+                    if not res["objects"]:
+                        print("Signed object not found")
+                    else:
+                        print(f" - SIGNED OBJECT {opt}:")
+                        print(res["objects"][0])
                         print()
                 except Exception as e:
                     print(e)
                 finally:
                     print("------------------------------")
                 return
-            elif cmd == 'get':
-                print('[TODO] -> get one object (request/response)"')
+            elif cmd == 'tamper' and len(opt.split(' ')) == 1 and opt.isdigit():
+                print("------------------------------")
+                try:
+                    res = self.tamper(opt)
+                    if not res:
+                        print(f"Signed object with ID {opt} not found")
+                    else:
+                        print(f" - TAMPER SIGNED OBJECT WITH ID {opt}:")
+                        print()
+                        print(res)
+                        print("---------")
+                        print(f"Signed object with ID {opt} is tampered successfully")
+                except Exception as e:
+                    print(e)
+                finally:
+                    print("------------------------------")
                 return
             elif cmd == 'verify'  and not opt:
                 print('[TODO] -> /verify <object_id>')
@@ -195,18 +224,24 @@ class Client:
         return self.send_request(data_to_send[0], data_to_send[1])
     
     # COMMAND: GET <object_id>
-    def get(self, object_id: int):
-       pass
+    def get(self, object_id: str):
+        data_to_send: tuple[bytes, dict[str, str]] = encode_get_object(object_id)
+        return self.send_request(data_to_send[0], data_to_send[1])
     
     # COMMAND: LIST
     def list(self):
         data_to_send: tuple[bytes, dict[str, str]] = encode_list_objects()
         return self.send_request(data_to_send[0], data_to_send[1])
     
-    # Centralize all requests in one function
+    # COMMAND: TAMPER
+    def tamper(self, object_id: str):
+        data_to_send: tuple[bytes, dict[str, str]] = encode_tamper_object(object_id)
+        return self.send_request(data_to_send[0], data_to_send[1])
+    
+    # Centralize all request/reponse in one function and DIRECTLY get the response after
     def send_request(self, msg_type: bytes, payload: dict) -> dict:
         if not self.connected:
-            raise ConnectionClosedError("Not connected. Use /connect.")
+            raise ConnectionClosedError("Not connected. Use /connect to connect to the server")
 
         try:
             send_frame(self.socket, msg_type, payload)
@@ -214,7 +249,7 @@ class Client:
             return decode_response(resp_type, resp_payload)
 
         except (FrameException, ConnectionClosedError) as e:
-            raise Exception(f"Error : {e}") from e
+            raise Exception(f"Error on receiving response: {e}") from e
 
 client = Client()
 client.run()

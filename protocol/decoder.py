@@ -11,9 +11,7 @@ def decode_request(msg_type: bytes, payload: dict) -> dict:
     command = payload.get("command")
 
     if command != expected_command:
-        raise FrameException(
-            "Unsupported command"
-        )
+        raise FrameException("Unsupported command")
 
     required = REQUIRED_FIELDS[expected_command]
     missing = [field for field in required if field not in payload]
