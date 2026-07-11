@@ -5,7 +5,7 @@ from pathlib import Path
 from protocol.frame import (ConnectionClosedError, FrameException, build_frame, read_frame)
 from protocol.encoder import (encode_error, encode_ok, MessageType)
 from protocol.decoder import (decode_request)
-from storage.object_store import (MetadataError, StorageError, get_object_by_id, store_signed_object, get_list_object, tamper)
+from storage.object_store import (MetadataException, StorageError, get_object_by_id, store_signed_object, get_list_object, tamper)
 from constant import STORAGE_DIR
 
 DEFAULT_HOST = 'localhost'
@@ -35,24 +35,28 @@ while True:
                 signed_object: dict = decode_request(msg_type, payload)
                 # store the signed_object in the "server_storage" folder
                 store_signed_object(signed_object)
-                resp_bytes= build_frame(MessageType.OK, encode_ok(f"Signed object added for {signed_object["sender"]} and store in  /server_storage folder")[1]) 
+                type, response = encode_ok(signed_object) 
+                resp_bytes= build_frame(type, response)
                 conn.sendall(resp_bytes) # send the response to the client
                 
             if msg_type == MessageType.GET:
                 object_id_request : dict = decode_request(msg_type, payload)
-                object = get_object_by_id(object_id_request["object_id"])
-                resp_bytes= build_frame(MessageType.GET, object) 
+                object_result = get_object_by_id(object_id_request["object_id"])
+                type, response = encode_ok({"object": object_result["object"]})
+                resp_bytes= build_frame(type, response)
                 conn.sendall(resp_bytes) # send the response to the client
 
             if msg_type == MessageType.LIST:
                 objects = get_list_object()
-                resp_bytes= build_frame(MessageType.LIST, objects) 
+                type, response = encode_ok({"objects": objects["objects"]})
+                resp_bytes= build_frame(type, response)
                 conn.sendall(resp_bytes) # send the response to the client
 
             if msg_type == MessageType.TAMPER:
                 object_id_request : dict = decode_request(msg_type, payload)
-                object: dict = tamper(object_id_request["object_id"])
-                resp_bytes= build_frame(MessageType.TAMPER, object)
+                object_tampered: dict = tamper(object_id_request["object_id"])
+                type, response = encode_ok({"object": object_tampered})
+                resp_bytes= build_frame(type, response)
                 conn.sendall(resp_bytes) # send the response to the client
 
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
@@ -76,7 +80,7 @@ while True:
         except PermissionError as e:
             resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Permission denied: {e}")[1])
             conn.sendall(resp_bytes)
-        except MetadataError as e:
+        except MetadataException as e:
             resp_bytes= build_frame(MessageType.ERROR, encode_error(f"Metadata error: {e}")[1])
             conn.sendall(resp_bytes)
         except OSError as e:
