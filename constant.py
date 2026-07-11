@@ -4,6 +4,9 @@ DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 6000
 BUFFER_SIZE = 4096
 
+STORAGE_DIR = "server_storage"
+KEY_DIR = "keys"
+
 TYPE_TO_COMMAND = {
     MessageType.SUBMIT: "SEND_SIGNED_TEXT",
     MessageType.LIST: "LIST_OBJECTS",
@@ -25,5 +28,11 @@ REQUIRED_FIELDS = {
     "TAMPER_OBJECT": ["object_id"],
 }
 
-STORAGE_DIR = "server_storage"
-KEY_DIR = "keys"
+REQUIRED_METADATA_FIELDS: dict[str, type] = {
+    "object_id": int,
+    "object_name": str,
+    "sender": str,
+    "hash_algorithm": str,
+    "timestamp": str,
+    "tampered": bool,
+}

@@ -27,10 +27,18 @@ def encode_list_objects():
     return MessageType.LIST, payload  
 
 def encode_get_object(object_id: str):
-    pass 
+    payload = {
+        "command": "GET_OBJECT",
+        "object_id": object_id
+    }
+    return MessageType.GET, payload  
 
 def encode_tamper_object(object_id: str):
-    pass
+    payload = {
+        "command": "TAMPER_OBJECT",
+        "object_id": object_id
+    }
+    return MessageType.TAMPER, payload  
 
 def encode_ok(message: str) -> tuple[bytes, dict]:
     payload = {
